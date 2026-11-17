@@ -9,7 +9,9 @@ A deterministic rules engine for a Catan-like board game, written in Rust.
   is silent. `docs/TRACE_FORMAT.md`: the game export that other engines replay.
 
 Build and test with `cargo test --workspace` (Rust with edition 2024). The browser build is
-`cargo build --release -p engine-wasm --target wasm32-unknown-unknown`.
+`cargo build --profile wasm -p engine-wasm --target wasm32-unknown-unknown`. CI
+(`.github/workflows/ci.yml`) runs the format check, Clippy, the tests in debug and release, and
+the browser build.
 
 This repository is published from a private one, which holds the history; each commit here is a
 copy of the engine as it stands there. Issues are welcome; changes are made in the private
