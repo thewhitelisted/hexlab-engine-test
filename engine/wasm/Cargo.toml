@@ -1,0 +1,14 @@
+[package]
+name = "engine-wasm"
+description = "The engine in the browser: WebAssembly exports for instant calculations on the web pages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+engine-core.workspace = true
+serde_json.workspace = true
