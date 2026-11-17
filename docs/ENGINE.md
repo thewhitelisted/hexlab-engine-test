@@ -82,4 +82,4 @@ Measured on the VPS (6 vCPU, x86_64) on 2026-10-26, release build, one thread un
 
 Per-action cost is roughly 130 ns to generate moves, 100 ns for the random policy and 130 ns to apply a move. Placing a road costs about 600 ns (longest-road update); everything else is under 200 ns. `hexlab bench --breakdown` prints the full table.
 
-The M1 target of 10,000 random games per second per thread is not met: we reach ~8,600 without offers. The workload is chosen to be comparable with other engines' published figures. Rollout speed for bots will be measured directly in M2.
+The target of 10,000 random games per second per thread is not met: we reach ~8,600 without offers. The workload is chosen to be comparable with other engines' published figures. Rollout speed for bots will be measured directly at a later stage.

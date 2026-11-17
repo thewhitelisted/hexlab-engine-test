@@ -1,7 +1,7 @@
-//! The engine in the browser (docs/SCOPE.md, M3: "the Rust engine compiled to WASM for instant
-//! in-browser calculations"), built for `wasm32-unknown-unknown` with no bindings generator. Each
-//! export takes a JSON string the page wrote into the module's memory and returns one there;
-//! `web/src/engine.ts` is the page's side.
+//! The engine in the browser, compiled to WebAssembly for instant in-browser calculations. Built
+//! for `wasm32-unknown-unknown` with no bindings generator. Each export takes a JSON string the
+//! page wrote into the module's memory and returns one there; `web/src/engine.ts` is the page's
+//! side.
 //!
 //! - `check_position`: whether a position typed into the endgame calculator's editor can be built,
 //!   and if not, why: the same `engine_core::entered::build` the server runs.
