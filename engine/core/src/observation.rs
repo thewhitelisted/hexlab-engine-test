@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::state::{Building, GameState, PendingTrade, Phase};
+use crate::state::{Building, GameState, PendingTrade, Phase, Standing};
 use crate::types::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +35,8 @@ pub struct Observation {
     pub longest_road: Option<PlayerId>,
     pub largest_army: Option<PlayerId>,
     pub winner: Option<PlayerId>,
+    /// Every seat's result, hidden cards included, once the game is over.
+    pub standings: Option<Vec<Standing>>,
     pub last_roll: Option<(u8, u8)>,
     pub discard_pending: Vec<u8>,
     pub trade: Option<PendingTrade>,
@@ -86,6 +88,7 @@ impl GameState {
             longest_road: self.longest_road,
             largest_army: self.largest_army,
             winner: self.winner,
+            standings: self.final_standings(),
             last_roll: self.last_roll,
             discard_pending: self.discard_pending[..n].to_vec(),
             trade: self.trade,

@@ -167,6 +167,11 @@ impl<'a> View<'a> {
         self.state.total_vp(self.me)
     }
 
+    /// Every seat's result, hidden cards included, once the game is over; `None` before.
+    pub fn final_standings(&self) -> Option<Vec<crate::state::Standing>> {
+        self.state.final_standings()
+    }
+
     /// Legal actions. Only meaningful when the viewer is the acting player: legal actions
     /// depend on the acting player's own cards and public information only.
     pub fn legal_actions(&self, offers: OfferSpace, out: &mut Vec<Action>) {

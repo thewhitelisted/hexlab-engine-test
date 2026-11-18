@@ -1,5 +1,6 @@
 //! Full game state (the referee's view, including hidden information).
 
+use std::cmp::Reverse;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -227,6 +228,38 @@ pub(crate) fn code_owner(code: u8) -> PlayerId {
 #[inline]
 pub(crate) fn code_is_city(code: u8) -> bool {
     code & CITY_FLAG != 0
+}
+
+/// One seat's result in a finished game (docs/RULES.md, "Winning").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Standing {
+    /// All of the seat's points, victory point cards included.
+    pub points: u8,
+    /// Victory point cards the seat held, shown to everyone once the game is over.
+    pub vp_cards: u8,
+    /// 1 for the winner; see [`final_places`].
+    pub place: usize,
+}
+
+/// Each seat's place at the end of a game won by `winner`, from everyone's full points: the
+/// winner is 1st, whatever the points, since the game is won only on one's own turn and a
+/// player not on turn can hold more. The others follow from 2nd by points, highest first. Equal
+/// points share the better place and the next place is skipped (10, 8, 8, 3 with seat 0 the
+/// winner places 1, 2, 2, 4). `None` if `winner` is no seat.
+pub fn final_places(points: &[u32], winner: usize) -> Option<Vec<usize>> {
+    if winner >= points.len() {
+        return None;
+    }
+    let keys: Vec<(bool, Reverse<u32>)> = points
+        .iter()
+        .enumerate()
+        .map(|(q, &p)| (q != winner, Reverse(p)))
+        .collect();
+    Some(
+        keys.iter()
+            .map(|k| 1 + keys.iter().filter(|other| *other < k).count())
+            .collect(),
+    )
 }
 
 /// `Clone` is written out below, so `clone_from` can reuse the buffers.
@@ -533,6 +566,24 @@ impl GameState {
         self.visible_vp(p) + self.players[p as usize].vp_cards()
     }
 
+    /// Every seat's result, in seat order, once the game is over; `None` before.
+    pub fn final_standings(&self) -> Option<Vec<Standing>> {
+        let winner = self.winner.filter(|_| self.is_over())?;
+        let seats = 0..self.num_players() as PlayerId;
+        let points: Vec<u32> = seats.clone().map(|q| u32::from(self.total_vp(q))).collect();
+        let places = final_places(&points, usize::from(winner))?;
+        Some(
+            seats
+                .zip(places)
+                .map(|(q, place)| Standing {
+                    points: self.total_vp(q),
+                    vp_cards: self.players[q as usize].vp_cards(),
+                    place,
+                })
+                .collect(),
+        )
+    }
+
     pub(crate) fn place_settlement(&mut self, p: PlayerId, v: VertexId) {
         self.vertex[v as usize] = settlement_code(p);
         self.players[p as usize].settlements_left -= 1;
@@ -674,6 +725,74 @@ mod tests {
             }
             assert_eq!(shown(from), before);
         }
+    }
+
+    #[test]
+    fn final_places_put_the_winner_first_and_share_ties_among_the_rest() {
+        let cases: [(&[u32], usize, &[usize]); 9] = [
+            (&[10, 7, 5, 3], 0, &[1, 2, 3, 4]),
+            // The winner can have fewer points than a loser (won on its own turn).
+            (&[10, 11, 7, 3], 0, &[1, 2, 3, 4]),
+            // A loser level with the winner is 2nd, not joint 1st.
+            (&[9, 9, 8, 2], 0, &[1, 2, 3, 4]),
+            (&[10, 10, 10, 10], 2, &[2, 2, 1, 2]),
+            (&[10, 8, 8, 3], 0, &[1, 2, 2, 4]),
+            (&[3, 8, 8, 10], 3, &[4, 2, 2, 1]),
+            (&[0, 15], 0, &[1, 2]),
+            (&[15, 0], 1, &[2, 1]),
+            (&[u32::MAX, 0, u32::MAX], 1, &[2, 1, 2]),
+        ];
+        for (points, winner, want) in cases {
+            assert_eq!(
+                final_places(points, winner).as_deref(),
+                Some(want),
+                "{points:?} won by {winner}"
+            );
+        }
+        assert_eq!(final_places(&[10, 7], 2), None);
+        assert_eq!(final_places(&[], 0), None);
+    }
+
+    /// Against a reference that sorts the seats and walks the order, on every result of 2 to 4
+    /// seats with 0 to 12 points. Also checks that the mean place the evaluation summary takes
+    /// from these places (ahead, plus the middle of those level) equals the same mean taken
+    /// from the points and the winner directly, by a ranking key written here.
+    #[test]
+    fn final_places_match_a_sorting_reference_on_every_small_result() {
+        let mut checked = 0;
+        for n in 2..=4u32 {
+            for code in 0..13u32.pow(n) {
+                let points: Vec<u32> = (0..n).map(|i| code / 13u32.pow(i) % 13).collect();
+                for winner in 0..points.len() {
+                    let places = final_places(&points, winner).unwrap();
+                    let mut order: Vec<usize> = (0..points.len()).collect();
+                    order.sort_by_key(|&q| (q != winner, Reverse(points[q])));
+                    let mut want = vec![0; points.len()];
+                    for (i, &q) in order.iter().enumerate() {
+                        let prev = i.checked_sub(1).map(|j| order[j]);
+                        want[q] = match prev {
+                            Some(p) if p != winner && points[p] == points[q] => want[p],
+                            _ => i + 1,
+                        };
+                    }
+                    assert_eq!(places, want, "{points:?} won by {winner}");
+                    for seat in 0..points.len() {
+                        let key = |q: usize| (q != winner, Reverse(points[q]));
+                        let before = (0..points.len()).filter(|&q| key(q) < key(seat)).count()
+                            as f64
+                            + ((0..points.len()).filter(|&q| key(q) == key(seat)).count() as f64
+                                + 1.0)
+                                / 2.0;
+                        let mine = places[seat];
+                        let now = places.iter().filter(|&&p| p < mine).count() as f64
+                            + (places.iter().filter(|&&p| p == mine).count() as f64 + 1.0) / 2.0;
+                        assert_eq!(now, before, "{points:?} won by {winner}, seat {seat}");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert_eq!(checked, 13 * 13 * 2 + 13u32.pow(3) * 3 + 13u32.pow(4) * 4);
     }
 }
 

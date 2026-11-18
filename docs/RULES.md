@@ -82,6 +82,8 @@ Sources for `official`: the base-game *Game Rules & Almanac* (catan.com, `catan_
 
 **Winning.** You win as soon as you reach the target on your own turn, counting victory point cards. Points gained on someone else's turn, such as Longest Road changing hands after a cut, win at the start of your next turn, before the roll (FAQ question 75: you don't have to roll).
 
+**Final standings.** When the game ends, every player's victory point cards are shown and counted. The winner is 1st, even when another player holds more points: the others can pass the target off their turn (Longest Road changing hands, say), and only the player on turn can win. The others follow from 2nd by points, highest first. Players with equal points share the better place, and the next place is skipped: with the winner on 10 and the others on 8, 8 and 3, the places are 1st, 2nd, 2nd and 4th. *Engine:* `final_places` and `GameState::final_standings` (`engine/core/src/state.rs`), which the server sends to the Play and Watch pages and counts places with in the evaluation summary.
+
 ## Variant details
 
 **Friendly robber.** The robber can't go on a hex where an opponent has a building and **visible** points (buildings and awards) of the configured maximum or fewer. If every hex is protected, it may go anywhere. Catanatron's version counts hidden victory point cards too. The live 1v1 rule still needs checking.

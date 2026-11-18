@@ -10,7 +10,7 @@ use engine_core::edit::EditError;
 use engine_core::record::{GameRecord, ReplayError};
 use engine_core::rules::ShortageRule;
 use engine_core::sim::{Limits, RandomPolicy, TurnGuard, play_out};
-use engine_core::state::Resume;
+use engine_core::state::{Resume, Standing};
 use engine_core::topology::Axial;
 use engine_core::*;
 
@@ -2251,5 +2251,90 @@ fn any_position_can_be_turned_into_a_robber_move_at_the_start_of_a_turn() {
     assert!(
         s.is_over() && between(s.robber_to_move(0)),
         "not after the end"
+    );
+}
+
+/// Seat 0 with nine visible points on turn, about to buy its tenth; seat 1 with `seat1_cities`
+/// cities and `seat1_vp_cards` victory point cards, both hidden from the others until the end.
+fn about_to_win_by_a_card(seat1_cities: usize, seat1_vp_cards: u8) -> GameState {
+    let mut s = position(4);
+    let spots = spread_vertices(&s, 5 + seat1_cities, &HashSet::new());
+    for &v in &spots[..4] {
+        s.put_city(0, v).unwrap();
+    }
+    s.put_settlement(0, spots[4]).unwrap();
+    for &v in &spots[5..] {
+        s.put_city(1, v).unwrap();
+    }
+    for _ in 0..seat1_vp_cards {
+        s.give_dev_card(1, DevCard::VictoryPoint, false).unwrap();
+    }
+    s.set_turn(0, 20, true).unwrap();
+    s.set_hand(0, cost::DEV_CARD).unwrap();
+    s.finish_edit().unwrap();
+    assert_eq!(s.total_vp(0), 9);
+    assert!(s.final_standings().is_none(), "no standings before the end");
+    for q in 0..4 {
+        assert!(s.observe(q).standings.is_none());
+    }
+    s.apply_forced(
+        Action::BuyDevCard,
+        Some(Forced::DevCard(DevCard::VictoryPoint)),
+    )
+    .unwrap();
+    assert_eq!((s.winner, s.phase), (Some(0), Phase::GameOver));
+    s
+}
+
+#[test]
+fn final_standings_reveal_the_winners_hidden_victory_point_cards() {
+    let s = about_to_win_by_a_card(2, 2);
+    let want = vec![
+        Standing {
+            points: 10,
+            vp_cards: 1,
+            place: 1,
+        },
+        Standing {
+            points: 6,
+            vp_cards: 2,
+            place: 2,
+        },
+        Standing {
+            points: 0,
+            vp_cards: 0,
+            place: 3,
+        },
+        Standing {
+            points: 0,
+            vp_cards: 0,
+            place: 3,
+        },
+    ];
+    assert_eq!(s.final_standings(), Some(want.clone()));
+    // Every seat sees every seat's cards once the game is over, not the visible points only.
+    for q in 0..4 {
+        assert_eq!(s.observe(q).standings, Some(want.clone()), "seat {q}");
+        assert_eq!(s.view(q).final_standings(), Some(want.clone()), "seat {q}");
+        assert_eq!(
+            s.view(q).visible_vp(0),
+            9,
+            "visible points stay what they are"
+        );
+    }
+}
+
+#[test]
+fn the_winner_is_first_even_with_fewer_points_than_a_loser() {
+    // Seat 1 holds 8 points in cities and 3 cards (11) but wins only on its own turn; seat 0
+    // reaches 10 first, on its turn.
+    let s = about_to_win_by_a_card(4, 3);
+    let standings = s.final_standings().unwrap();
+    assert_eq!(
+        standings
+            .iter()
+            .map(|x| (x.points, x.place))
+            .collect::<Vec<_>>(),
+        [(10, 1), (11, 2), (0, 3), (0, 3)]
     );
 }
