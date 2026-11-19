@@ -346,6 +346,7 @@ impl<'a> View<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::rules::PlayerCount;
     use std::sync::Arc;
 
     use super::*;
@@ -366,7 +367,7 @@ mod tests {
         max_hypotheses: usize,
         mut f: impl FnMut(&GameState, &[BeliefTracker]),
     ) {
-        let config = GameConfig::official(4);
+        let config = GameConfig::official(PlayerCount::FOUR);
         let mut state = GameState::new(&config, seed);
         let mut beliefs: Vec<_> = (0..4)
             .map(|p| {
@@ -576,13 +577,15 @@ mod tests {
 
         // Largest Army, a pending trade, and a viewer's belief updated through the view.
         let board = Arc::new(Board::generate(&BoardGen::OFFICIAL, &mut Rng::seed(1)));
-        let mut s = GameState::empty_position(GameConfig::official(2).rules, board, 1);
+        let mut s =
+            GameState::empty_position(GameConfig::official(PlayerCount::TWO).rules, board, 1)
+                .unwrap();
         for _ in 0..3 {
             s.add_played_card(1, DevCard::Knight).unwrap();
         }
         s.finish_edit().unwrap();
         assert_eq!(s.view(0).largest_army(), Some(1));
-        let mut s = GameState::new(&GameConfig::official(2), 1);
+        let mut s = GameState::new(&GameConfig::official(PlayerCount::TWO), 1);
         s.trade = Some(PendingTrade {
             responder_offset: 1,
             ..PendingTrade::offer(Hand::of(Resource::Wood, 1), Hand::of(Resource::Ore, 1))
@@ -659,7 +662,9 @@ mod tests {
     #[test]
     fn the_unseen_pool_leaves_out_my_cards_and_played_ones() {
         let board = Arc::new(Board::generate(&BoardGen::OFFICIAL, &mut Rng::seed(1)));
-        let mut s = GameState::empty_position(GameConfig::official(2).rules, board, 1);
+        let mut s =
+            GameState::empty_position(GameConfig::official(PlayerCount::TWO).rules, board, 1)
+                .unwrap();
         s.give_dev_card(0, DevCard::Knight, false).unwrap();
         s.give_dev_card(0, DevCard::Monopoly, true).unwrap();
         s.add_played_card(1, DevCard::Knight).unwrap();
@@ -679,7 +684,7 @@ mod tests {
             assert!((p[c.index()] - want[c.index()] as f64 / total as f64).abs() < 1e-12);
         }
         // Holding every card: nothing unseen, and no division by zero.
-        let mut s = GameState::empty_position(s.rules, s.board.clone(), 1);
+        let mut s = GameState::empty_position(s.rules, s.board.clone(), 1).unwrap();
         for c in DevCard::ALL {
             for _ in 0..BASE_DEV_DECK[c.index()] {
                 s.give_dev_card(0, c, false).unwrap();
@@ -719,7 +724,9 @@ mod tests {
     /// points), player 1 4 cities and 1 settlement (9).
     fn ten_and_nine() -> GameState {
         let board = Arc::new(Board::generate(&BoardGen::OFFICIAL, &mut Rng::seed(1)));
-        let mut s = GameState::empty_position(GameConfig::official(2).rules, board, 1);
+        let mut s =
+            GameState::empty_position(GameConfig::official(PlayerCount::TWO).rules, board, 1)
+                .unwrap();
         let topo = s.board.topology.clone();
         let mut spots: Vec<VertexId> = Vec::new();
         for v in 0..topo.num_vertices() as VertexId {
@@ -772,7 +779,9 @@ mod tests {
         // For example hands typed into the analysis board that don't add up: player 1 holds two
         // wood, the belief says two brick. The public counts say the two cards are wood.
         let board = Arc::new(Board::generate(&BoardGen::OFFICIAL, &mut Rng::seed(1)));
-        let mut s = GameState::empty_position(GameConfig::official(2).rules, board, 1);
+        let mut s =
+            GameState::empty_position(GameConfig::official(PlayerCount::TWO).rules, board, 1)
+                .unwrap();
         s.set_hand(1, Hand::new(2, 0, 0, 0, 0)).unwrap();
         s.finish_edit().unwrap();
         let wrong = std::array::from_fn(|q| {

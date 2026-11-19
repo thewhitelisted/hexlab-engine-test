@@ -172,7 +172,7 @@ impl GameState {
                 touched |= 1 << owner;
             }
         }
-        for q in 0..self.rules.num_players {
+        for q in 0..self.rules.num_players.get() {
             if touched & (1 << q) != 0 {
                 self.players[q as usize].road_length = self.compute_road_length(q);
             }

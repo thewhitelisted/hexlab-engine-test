@@ -7,7 +7,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::bits::Bits;
-use crate::board::Board;
+use crate::board::{Board, BoardError};
 use crate::dice::Dice;
 use crate::rng::Rng;
 use crate::rules::{GameConfig, Rules};
@@ -446,15 +446,19 @@ impl GameState {
         let mut rng = Rng::seed(seed);
         let board = Arc::new(Board::generate(&config.board, &mut rng));
         GameState::with_board(config.rules, board, rng)
+            .expect("a generated board is the standard one, which hosts every player count")
     }
 
-    /// Starts a game on a given board. The RNG shuffles the deck; after that it is never advanced,
+    /// Starts a game on a given board, or says why the board can't hold a game of the rules'
+    /// player count (`Board::hosts`). The RNG shuffles the deck; after that it is never advanced,
     /// and dice and steals derive their own streams from it, keyed by turn (see `Rng::derive`).
-    pub fn with_board(rules: Rules, board: Arc<Board>, mut rng: Rng) -> GameState {
-        assert!(
-            (2..=MAX_PLAYERS as u8).contains(&rules.num_players),
-            "unsupported player count"
-        );
+    pub fn with_board(rules: Rules, board: Arc<Board>, rng: Rng) -> Result<GameState, BoardError> {
+        board.hosts(rules.num_players)?;
+        Ok(GameState::on_board(rules, board, rng))
+    }
+
+    /// `with_board` without the board's check, for a caller that checked what its start needs.
+    pub(crate) fn on_board(rules: Rules, board: Arc<Board>, mut rng: Rng) -> GameState {
         let mut dev_deck = Vec::with_capacity(25);
         for card in DevCard::ALL {
             dev_deck.extend(std::iter::repeat_n(
@@ -500,7 +504,7 @@ impl GameState {
 
     #[inline]
     pub fn num_players(&self) -> usize {
-        self.rules.num_players as usize
+        usize::from(self.rules.num_players.get())
     }
 
     #[inline]
@@ -515,7 +519,7 @@ impl GameState {
 
     /// The player who must make the next decision.
     pub fn acting_player(&self) -> PlayerId {
-        let n = self.rules.num_players;
+        let n = self.rules.num_players.get();
         match self.phase {
             Phase::Discard => (0..n)
                 .map(|i| (self.current + i) % n)
@@ -605,7 +609,7 @@ impl GameState {
 
     /// Player placing during initial placement step `step` (snake order).
     pub(crate) fn setup_player(&self, step: u8) -> PlayerId {
-        let n = self.rules.num_players;
+        let n = self.rules.num_players.get();
         if step < n { step } else { 2 * n - 1 - step }
     }
 
@@ -665,6 +669,7 @@ impl Hasher for Fnv64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::PlayerCount;
 
     #[test]
     fn position_hashes_use_64_bit_fnv_1a() {
@@ -689,7 +694,7 @@ mod tests {
 
     /// A game `steps` random legal moves in, on the board of `seed`.
     fn played(seed: u64, steps: usize) -> GameState {
-        let mut s = GameState::new(&crate::GameConfig::official(4), seed);
+        let mut s = GameState::new(&crate::GameConfig::official(PlayerCount::FOUR), seed);
         let (mut rng, mut legal) = (Rng::seed(seed), Vec::new());
         for _ in 0..steps {
             if s.is_over() {

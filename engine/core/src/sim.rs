@@ -235,11 +235,12 @@ pub fn play_out(
 mod tests {
     use super::*;
     use crate::rules::GameConfig;
+    use crate::rules::PlayerCount;
 
     #[test]
     fn play_out_ends_with_a_winner_or_at_the_turn_limit() {
         let mut buf = Vec::new();
-        let mut s = GameState::new(&GameConfig::official(4), 5);
+        let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 5);
         let limits = Limits::default();
         let w = play_out(
             &mut s,
@@ -252,7 +253,7 @@ mod tests {
         assert_eq!(w, s.winner);
         assert!(s.total_vp(w.unwrap()) >= s.rules.vp_to_win);
 
-        let mut s = GameState::new(&GameConfig::official(4), 5);
+        let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 5);
         let limits = Limits {
             max_turns: 3,
             ..Limits::default()
@@ -269,7 +270,7 @@ mod tests {
 
     #[test]
     fn the_guard_ends_a_turn_that_runs_too_long() {
-        let s = GameState::new(&GameConfig::official(2), 5);
+        let s = GameState::new(&GameConfig::official(PlayerCount::TWO), 5);
         let limits = Limits {
             max_actions_per_turn: 2,
             ..Limits::default()

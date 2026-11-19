@@ -7,7 +7,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::board::Board;
+use crate::board::{Board, BoardError};
 use crate::rng::Rng;
 use crate::rules::Rules;
 use crate::state::{GameState, Phase, Resume, city_code};
@@ -42,18 +42,30 @@ impl fmt::Display for EditError {
 
 impl std::error::Error for EditError {}
 
+/// The last turn a position may be set to. Far past any game (playouts stop at 1,000 turns by
+/// default), and far enough from `u32::MAX` that the turns played on from it don't wrap round to
+/// turn 0, the initial placement, where nobody can win.
+pub const MAX_TURN: u32 = 100_000;
+
 impl GameState {
-    /// An empty board after initial placement: player 0 to roll on turn 1.
-    pub fn empty_position(rules: Rules, board: Arc<Board>, seed: u64) -> GameState {
-        let mut s = GameState::with_board(rules, board, Rng::seed(seed));
-        s.setup_step = 2 * rules.num_players;
+    /// An empty board after initial placement: player 0 to roll on turn 1. The placement is
+    /// over, so of what [`Board::hosts`] checks only the robber's move applies: a board of one
+    /// hex is refused.
+    pub fn empty_position(
+        rules: Rules,
+        board: Arc<Board>,
+        seed: u64,
+    ) -> Result<GameState, BoardError> {
+        board.robber_can_move()?;
+        let mut s = GameState::on_board(rules, board, Rng::seed(seed));
+        s.setup_step = 2 * rules.num_players.get();
         s.turn = 1;
         s.phase = Phase::PreRoll;
-        s
+        Ok(s)
     }
 
     fn check_player(&self, p: PlayerId) -> Result<(), EditError> {
-        if p < self.rules.num_players {
+        if p < self.rules.num_players.get() {
             Ok(())
         } else {
             Err(EditError::InvalidId)
@@ -213,6 +225,11 @@ impl GameState {
         if turn == 0 {
             return Err(EditError::Invalid("turn 0 is initial placement".into()));
         }
+        if turn > MAX_TURN {
+            return Err(EditError::Invalid(format!(
+                "turn {turn}: a position is at turn {MAX_TURN} at most"
+            )));
+        }
         self.current = current;
         self.turn = turn;
         self.phase = if rolled { Phase::Main } else { Phase::PreRoll };
@@ -268,7 +285,7 @@ impl GameState {
 
     /// Recomputes road lengths, assigns any award the position clearly decides, and validates.
     pub fn finish_edit(&mut self) -> Result<(), EditError> {
-        for q in 0..self.rules.num_players {
+        for q in 0..self.rules.num_players.get() {
             self.players[q as usize].road_length = self.compute_road_length(q);
         }
         self.update_longest_road();

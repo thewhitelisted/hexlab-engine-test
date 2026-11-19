@@ -71,13 +71,14 @@ pub unsafe extern "C" fn check_position(ptr: *mut u8, len: usize) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine_core::PlayerCount;
     use engine_core::record::GameRecord;
     use engine_core::sim::{Limits, RandomPolicy, play_out};
     use engine_core::{GameConfig, GameState, Rng};
 
     #[test]
     fn a_position_is_checked_as_the_server_builds_it() {
-        let config = GameConfig::official(4);
+        let config = GameConfig::official(PlayerCount::FOUR);
         let mut state = GameState::new(&config, 3);
         let layout = GameRecord::start(&config, 3, &state).board;
         let limits = Limits {
@@ -127,7 +128,7 @@ mod tests {
     /// browser's build and isn't called here.
     #[test]
     fn hostile_input_gets_an_answer_not_a_panic() {
-        let config = GameConfig::official(4);
+        let config = GameConfig::official(PlayerCount::FOUR);
         let mut state = GameState::new(&config, 3);
         let layout = GameRecord::start(&config, 3, &state).board;
         let limits = Limits {

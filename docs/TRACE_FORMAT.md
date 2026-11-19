@@ -6,7 +6,7 @@
 hexlab diff-export --preset official --games 100 --seed 1 --policy uniform
 ```
 
-- `--preset`: `official`, `official-proposal-round` (`official` with a round of proposals after each roll, as on 2026-11-12), `official-no-counters` (`official` without open trading), `colonist-1v1` or `catanatron-compat` (RULES.md, "Presets"). `--players N` sets the player count (default 4); `colonist-1v1` always has two.
+- `--preset`: `official`, `official-proposal-round` (`official` with a round of proposals after each roll, as on 2026-11-12), `official-no-counters` (`official` without open trading), `colonist-1v1` or `catanatron-compat` (RULES.md, "Presets"). `--players N` sets the player count, 2 to 4 (default 4); `colonist-1v1` always has two.
 - `--policy`: `uniform` picks uniformly among legal actions, so games are long and full of trade offers. `builder` builds whenever it can, so games reach a winner in a realistic number of turns.
 - Games stop at a winner, or after turn 1000 with no winner.
 

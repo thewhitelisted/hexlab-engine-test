@@ -2,19 +2,20 @@
 
 A deterministic, allocation-light rules engine. It is the base for the bots, the training tools and self-play. Rules are described in [RULES.md](RULES.md).
 
-## Now (2026-11-17)
+## Now (2026-11-18)
 
 - **Presets:** five. `official` (open trading with counter-offers), `official-no-counters` and `official-proposal-round` (the two earlier trading flows, kept so that older results replay), `colonist-1v1` and `catanatron-compat`.
-- **Tests in `engine/core`:** 43 unit tests in the source files, 56 rule tests in `tests/rules.rs` and 5 in `tests/fuzz.rs`.
+- **Tests in `engine/core`:** unit tests in the source files, rule tests in `tests/rules.rs`, random play in `tests/fuzz.rs`, and `tests/hostile_records.rs` (records from outside, and records written before the player count had its own type).
+- **Input from outside, as far as issue #23 covers it**, is read into checked types and refused with an error, and nothing read that way panics later: a stored record's player count, board and steps (the rules check each step before a review, the dashboard or the endgame calculator sees it), boards, typed-in positions, `--players`, and the contents of `policy-eval` arrays, `openings` study files and `perft` queries. Not yet: a record's other rule numbers, files that aren't regular or are too large to read, and other command-line numbers, which can still panic or exhaust memory (for example `study --first-game`, `positions --games` and `--per-game`). Those are issue #69.
 - **Cross-checks against other implementations:** Catanatron, JSettlers2, a reference model in Python and a phase model in Quint (docs/TRACEABILITY.md). Each script builds the engine first and stops if it doesn't build.
 - **The speed figures below are from 2026-10-26** and have not been measured again since open trading was added.
 
 ## Using it
 
 ```rust
-use engine_core::{GameConfig, GameState};
+use engine_core::{GameConfig, GameState, PlayerCount};
 
-let config = GameConfig::official(4);
+let config = GameConfig::official(PlayerCount::FOUR);
 let mut state = GameState::new(&config, seed);    // board, deck and dice all from the seed
 let mut legal = Vec::new();
 while !state.is_over() {
@@ -27,7 +28,8 @@ while !state.is_over() {
 **Building a state:**
 
 - `GameState::new(config, seed)` creates a game. Everything random, including the board, deck shuffle, dice and steals, comes from one seeded RNG, so a seed reproduces a game.
-- `GameState::empty_position(rules, board, seed)` plus the `put_*` / `set_*` editors and `finish_edit()` build an arbitrary position. The analysis board and the rule tests use this (`edit.rs`).
+- `GameState::with_board(rules, board, rng)` starts a game on a given board, and `GameState::empty_position(rules, board, seed)` plus the `put_*` / `set_*` editors and `finish_edit()` build an arbitrary position. The analysis board and the rule tests use these (`edit.rs`). `with_board` returns an error for a board that can't hold a game of the rules' player count from the initial placement on (`Board::hosts`): one land hex leaves the robber nowhere to go, and too few corners can leave a player no spot in the initial placement. `empty_position` starts after the placement, so it checks only the first (`Board::robber_can_move`). `set_turn` takes turns 1 to `MAX_TURN` (100,000).
+- The player count is a `PlayerCount`, 2 to 4, defined once in `rules.rs`. The command line's `--players`, a stored record's `num_players` and a request's preset all become one through it, and anything else is refused. It is written as the bare number, so records read and write the same bytes as before it existed (`tests/hostile_records.rs`).
 
 **Applying moves:**
 
@@ -39,7 +41,7 @@ while !state.is_over() {
 
 - `observe(player)` is what one player may see.
 - `BeliefTracker` keeps an exact probability distribution over everyone's hidden hands from one player's view.
-- `GameRecord` stores a game with all chance outcomes, round-trips through JSON and replays bit-exactly (`position_hash` checks the result).
+- `GameRecord` stores a game with all chance outcomes, round-trips through JSON and replays bit-exactly (`position_hash` checks the result). `replay_steps` shows its callback a step only after the rules have applied it with its recorded outcome, so the review, the dashboard and the endgame calculator never work on a step that can't happen.
 
 ## Design
 

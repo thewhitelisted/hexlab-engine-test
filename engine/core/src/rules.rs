@@ -1,9 +1,88 @@
 //! Rule variants as data. Every setting that differs between the official rules, online
 //! platforms and house rules lives here, never as a code branch elsewhere.
 
+use std::fmt;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
 use crate::board::BoardGen;
+use crate::types::MAX_PLAYERS;
+
+/// How many players a game has: 2 to 4, the counts the base board is made for. A count from
+/// outside (a command line, a stored record, a request) becomes one through `TryFrom<u8>`,
+/// `FromStr` or deserializing, each of which refuses any other number. It is written as the bare
+/// number, as `Rules::num_players` always was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
+pub struct PlayerCount(u8);
+
+const _: () = assert!(PlayerCount::MAX as usize <= MAX_PLAYERS);
+
+impl PlayerCount {
+    pub const MIN: u8 = 2;
+    pub const MAX: u8 = 4;
+    pub const TWO: PlayerCount = PlayerCount(2);
+    pub const THREE: PlayerCount = PlayerCount(3);
+    pub const FOUR: PlayerCount = PlayerCount(4);
+
+    #[inline]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+/// A player count outside 2 to 4, as given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayerCountError(pub String);
+
+impl fmt::Display for PlayerCountError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "a game has {} to {} players, not {}",
+            PlayerCount::MIN,
+            PlayerCount::MAX,
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for PlayerCountError {}
+
+impl TryFrom<u8> for PlayerCount {
+    type Error = PlayerCountError;
+
+    fn try_from(n: u8) -> Result<PlayerCount, PlayerCountError> {
+        if (PlayerCount::MIN..=PlayerCount::MAX).contains(&n) {
+            Ok(PlayerCount(n))
+        } else {
+            Err(PlayerCountError(n.to_string()))
+        }
+    }
+}
+
+impl From<PlayerCount> for u8 {
+    fn from(n: PlayerCount) -> u8 {
+        n.0
+    }
+}
+
+impl FromStr for PlayerCount {
+    type Err = PlayerCountError;
+
+    fn from_str(s: &str) -> Result<PlayerCount, PlayerCountError> {
+        s.parse::<u8>()
+            .map_err(|_| PlayerCountError(format!("{s:?}")))
+            .and_then(PlayerCount::try_from)
+    }
+}
+
+impl fmt::Display for PlayerCount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,7 +106,7 @@ pub enum DevTiming {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Rules {
-    pub num_players: u8,
+    pub num_players: PlayerCount,
     pub vp_to_win: u8,
     /// A 7 makes every player holding more than this many cards discard half (rounded down).
     pub discard_limit: u8,
@@ -78,12 +157,8 @@ pub struct GameConfig {
 }
 
 impl GameConfig {
-    /// Official base game (6th edition rules) for 2-4 players.
-    pub fn official(num_players: u8) -> GameConfig {
-        assert!(
-            (2..=4).contains(&num_players),
-            "base board supports 2-4 players"
-        );
+    /// Official base game (6th edition rules).
+    pub fn official(num_players: PlayerCount) -> GameConfig {
         GameConfig {
             rules: Rules {
                 num_players,
@@ -108,7 +183,7 @@ impl GameConfig {
     pub fn colonist_1v1() -> GameConfig {
         GameConfig {
             rules: Rules {
-                num_players: 2,
+                num_players: PlayerCount::TWO,
                 vp_to_win: 15,
                 discard_limit: 9,
                 friendly_robber_max_vp: Some(2),
@@ -126,7 +201,7 @@ impl GameConfig {
 
     /// Official rules adjusted to match the Catanatron engine, for differential testing only:
     /// no player trading (its bots never offer) and its bank-shortage rule.
-    pub fn catanatron_compat(num_players: u8) -> GameConfig {
+    pub fn catanatron_compat(num_players: PlayerCount) -> GameConfig {
         let mut c = GameConfig::official(num_players);
         c.rules.player_trading = false;
         c.rules.open_trading = false;
@@ -136,7 +211,7 @@ impl GameConfig {
     }
 
     /// Looks up a preset by its CLI/config name.
-    pub fn preset(name: &str, num_players: u8) -> Option<GameConfig> {
+    pub fn preset(name: &str, num_players: PlayerCount) -> Option<GameConfig> {
         match name {
             "official" => Some(GameConfig::official(num_players)),
             // The official rules with the trading flow before 2026-11-12: only the player on turn
@@ -158,6 +233,96 @@ impl GameConfig {
             "colonist-1v1" => Some(GameConfig::colonist_1v1()),
             "catanatron-compat" => Some(GameConfig::catanatron_compat(num_players)),
             _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::hash::{Hash, Hasher};
+
+    use super::*;
+
+    /// The bytes a value feeds a hasher.
+    #[derive(Default)]
+    struct Fed(Vec<u8>);
+
+    impl Hasher for Fed {
+        fn finish(&self) -> u64 {
+            0
+        }
+        fn write(&mut self, bytes: &[u8]) {
+            self.0.extend_from_slice(bytes);
+        }
+    }
+
+    /// Issue #23: the count was checked as 2 to 4 by the rules, 2 to 6 by the state and the
+    /// command line, and not at all in a stored record. Every way a count comes in now takes 2
+    /// to 4 and refuses the rest: every byte, as text and as JSON, and the other shapes JSON has.
+    #[test]
+    fn a_player_count_is_2_to_4_however_it_comes_in() {
+        for n in 0..=u8::MAX {
+            let fits = (2..=4).contains(&n);
+            let by_number = PlayerCount::try_from(n);
+            let by_text = n.to_string().parse::<PlayerCount>();
+            let by_json = serde_json::from_value::<PlayerCount>(n.into());
+            assert_eq!(by_number.is_ok(), fits, "{n}");
+            assert_eq!(by_text, by_number, "{n}");
+            assert_eq!(by_json.ok(), by_number.clone().ok(), "{n}");
+            if let Ok(count) = by_number {
+                assert_eq!(count.get(), n);
+                // Written as the bare number, read back from what is written.
+                assert_eq!(count.to_string().parse(), Ok(count));
+                assert_eq!(serde_json::to_string(&count).unwrap(), n.to_string());
+                let (mut a, mut b) = (Fed::default(), Fed::default());
+                count.hash(&mut a);
+                n.hash(&mut b);
+                assert_eq!(a.0, b.0, "{n} feeds a hasher what the u8 did");
+            } else {
+                let err = by_number.unwrap_err().to_string();
+                assert_eq!(err, format!("a game has 2 to 4 players, not {n}"));
+            }
+        }
+        for text in [
+            "", " 4", "4 ", "4.0", "-1", "256", "1e1", "four", "0x4", "\u{664}",
+        ] {
+            let err = text.parse::<PlayerCount>().unwrap_err().to_string();
+            assert!(
+                err.starts_with("a game has 2 to 4 players"),
+                "{text:?}: {err}"
+            );
+        }
+        for json in [
+            "-1", "256", "65536", "4.0", "\"4\"", "null", "[4]", "{}", "true",
+        ] {
+            assert!(serde_json::from_str::<PlayerCount>(json).is_err(), "{json}");
+        }
+        assert_eq!(
+            [PlayerCount::TWO, PlayerCount::THREE, PlayerCount::FOUR].map(PlayerCount::get),
+            [PlayerCount::MIN, 3, PlayerCount::MAX]
+        );
+    }
+
+    /// The presets take every count, and the ones with a fixed count keep it.
+    #[test]
+    fn every_preset_takes_every_player_count() {
+        let names = [
+            "official",
+            "official-no-counters",
+            "official-proposal-round",
+            "colonist-1v1",
+            "catanatron-compat",
+        ];
+        for name in names {
+            for n in [PlayerCount::TWO, PlayerCount::THREE, PlayerCount::FOUR] {
+                let c = GameConfig::preset(name, n).unwrap();
+                let want = if name == "colonist-1v1" {
+                    PlayerCount::TWO
+                } else {
+                    n
+                };
+                assert_eq!(c.rules.num_players, want, "{name}");
+            }
         }
     }
 }

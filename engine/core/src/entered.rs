@@ -10,12 +10,14 @@ use crate::belief::Hands;
 use crate::board::Board;
 use crate::edit::EditError;
 use crate::rng::Rng;
-use crate::rules::GameConfig;
+use crate::rules::{GameConfig, PlayerCount};
 use crate::state::{GameState, Phase};
 use crate::types::*;
 
 /// Typed-in positions are of 4-player games.
-pub const PLAYERS: usize = 4;
+const COUNT: PlayerCount = PlayerCount::FOUR;
+/// [`COUNT`], to count seats with.
+pub const PLAYERS: usize = COUNT.get() as usize;
 
 /// A building in a typed-in position.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -161,7 +163,7 @@ pub struct Built {
 
 /// Builds a typed-in position, or says what makes it impossible.
 pub fn build(e: &Entered, board: Arc<Board>, seed: u64) -> Result<Built, String> {
-    let config = GameConfig::official(PLAYERS as u8);
+    let config = GameConfig::official(COUNT);
     if e.players.len() != PLAYERS {
         return Err(format!("a position has {PLAYERS} players"));
     }
@@ -198,7 +200,7 @@ pub fn build(e: &Entered, board: Arc<Board>, seed: u64) -> Result<Built, String>
             ));
         }
     }
-    let mut s = GameState::empty_position(config.rules, board, seed);
+    let mut s = GameState::empty_position(config.rules, board, seed).map_err(|e| e.to_string())?;
     // Settlements first, so a road can stand on one placed later in the list. A city goes down
     // whole, so a player's five settlements don't get in its way.
     for b in e.buildings.iter().filter(|b| !b.city) {
@@ -331,7 +333,7 @@ mod tests {
 
     /// A game of builders 40 turns in, between turns.
     fn midgame(seed: u64) -> GameState {
-        let mut s = GameState::new(&GameConfig::official(4), seed);
+        let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), seed);
         let limits = Limits {
             max_turns: 40,
             ..Limits::default()
@@ -492,7 +494,7 @@ mod tests {
     /// A small legal position: everyone has two settlements and a road by each, nobody has
     /// cards, Red (the seat) is to roll on turn 20.
     fn bare() -> (Entered, Arc<Board>) {
-        let s = GameState::new(&GameConfig::official(4), 11);
+        let s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 11);
         let topo = &s.board.topology;
         let spots = spread_spots(&s, &[], 8);
         assert_eq!(spots.len(), 8);
@@ -535,7 +537,7 @@ mod tests {
     #[test]
     fn five_settlements_and_a_city_can_be_entered() {
         let (mut e, board) = bare();
-        let s = GameState::new(&GameConfig::official(4), 11);
+        let s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 11);
         let taken: Vec<VertexId> = e.buildings.iter().map(|b| b.vertex).collect();
         let more = spread_spots(&s, &taken, 4);
         assert_eq!(more.len(), 4);
@@ -647,7 +649,12 @@ mod tests {
             }
         }
         // The editing call itself checks too, for 2-player positions.
-        let mut s = GameState::empty_position(GameConfig::official(2).rules, board.clone(), 1);
+        let mut s = GameState::empty_position(
+            GameConfig::official(PlayerCount::TWO).rules,
+            board.clone(),
+            1,
+        )
+        .unwrap();
         for holder in [2, 3, 4, 6, 255] {
             assert_eq!(s.set_awards(Some(holder), None), Err(EditError::InvalidId));
             assert_eq!(s.set_awards(None, Some(holder)), Err(EditError::InvalidId));
@@ -673,11 +680,17 @@ mod tests {
     fn hostile_positions_are_refused_not_panicked_on() {
         let (good, board) = bare();
         type Break = fn(&mut Entered);
-        let cases: [(&str, Break); 16] = [
+        let cases: [(&str, Break); 18] = [
             ("seat", |e| e.seat = 255),
             ("current", |e| e.current = 4),
             ("robber", |e| e.robber = 255),
             ("turn", |e| e.turn = 0),
+            // Issue #23: the turn after this one wrapped to 0, the initial placement, where
+            // nobody wins.
+            ("last turn there is", |e| e.turn = u32::MAX),
+            ("one turn past the last", |e| {
+                e.turn = crate::edit::MAX_TURN + 1
+            }),
             ("cards", |e| e.players[1].cards = u32::MAX),
             ("cards that wrap", |e| {
                 // 2^32 in all: a sum in 32 bits wraps to 0, which is what the bank leaves.
@@ -702,6 +715,13 @@ mod tests {
             break_it(&mut e);
             assert!(build(&e, board.clone(), 1).is_err(), "{what} accepted");
         }
+        // The last turn a position may be at.
+        let mut e = good.clone();
+        e.turn = crate::edit::MAX_TURN;
+        assert_eq!(
+            build(&e, board.clone(), 1).unwrap().state.turn,
+            crate::edit::MAX_TURN
+        );
         // Lists far longer than the board.
         let mut e = good.clone();
         e.buildings = vec![good.buildings[0]; 100_000];
@@ -717,7 +737,7 @@ mod tests {
     #[test]
     fn nobody_is_dealt_hidden_points_that_already_win() {
         let (mut e, board) = bare();
-        let s = GameState::new(&GameConfig::official(4), 11);
+        let s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 11);
         let taken: Vec<VertexId> = e.buildings.iter().map(|b| b.vertex).collect();
         let more = spread_spots(&s, &taken, 3);
         // Blue: four cities and a settlement, 9 points, to move, holding two hidden cards.
@@ -774,5 +794,108 @@ mod tests {
         forced.players[1].dev_cards = 1;
         let b = build(&forced, board, 3).unwrap();
         assert_eq!(b.state.winner, Some(1));
+    }
+
+    /// Positions made at random (seeded) from ones seen in real games: one to three fields set to
+    /// boundary values for their type (seats and owners, the turn, the robber, card counts, spots
+    /// and edges), pieces repeated or taken away, players added or removed. Each is built or
+    /// refused; none panics, and whatever is built is a valid position at a turn from 1 to
+    /// `MAX_TURN` that plays on for a few turns.
+    #[test]
+    fn generated_positions_are_built_or_refused() {
+        use crate::edit::MAX_TURN;
+        let small = [0u8, 1, 2, 3, 4, 5, 14, 18, 19, 20, 63, 64, 255];
+        let turns = [0, 1, 2, MAX_TURN - 1, MAX_TURN, MAX_TURN + 1, u32::MAX];
+        let counts = [0u32, 1, 2, 7, 19, 25, 95, 96, u32::MAX];
+        let spots = [0u16, 1, 53, 54, 71, 72, 255, 256, u16::MAX];
+        let starts: Vec<(Entered, Arc<Board>)> = (1..=4)
+            .map(|seed| {
+                let s = midgame(seed);
+                (Entered::seen(&s, (seed % 4) as PlayerId), s.board.clone())
+            })
+            .collect();
+        let mut rng = Rng::seed(23);
+        let (mut built, mut refused) = (0, 0);
+        for _ in 0..3000 {
+            let (good, board) = &starts[rng.below(starts.len() as u32) as usize];
+            let mut e = good.clone();
+            for _ in 0..1 + rng.below(3) {
+                let b = small[rng.below(small.len() as u32) as usize];
+                let n = counts[rng.below(counts.len() as u32) as usize];
+                let v = spots[rng.below(spots.len() as u32) as usize];
+                let q = rng.below(4) as usize;
+                let r = rng.below(5) as usize;
+                match rng.below(16) {
+                    0 => e.seat = b,
+                    1 => e.current = b,
+                    2 => e.turn = turns[rng.below(turns.len() as u32) as usize],
+                    3 => e.robber = b,
+                    4 => e.players[q].cards = n,
+                    5 => e.players[q].dev_cards = n,
+                    6 => e.players[q].played[r] = b,
+                    7 => e.hand[r] = b,
+                    8 => e.dev[r] = b,
+                    9 => e.bank[r] = b,
+                    10 => e.longest_road = Some(b),
+                    11 => e.largest_army = Some(b),
+                    12 => {
+                        let i = rng.below(e.buildings.len() as u32) as usize;
+                        match rng.below(4) {
+                            0 => e.buildings[i].vertex = v,
+                            1 => e.buildings[i].owner = b,
+                            2 => e.buildings[i].city = !e.buildings[i].city,
+                            _ => e.buildings.push(e.buildings[i]),
+                        }
+                    }
+                    13 => {
+                        let i = rng.below(e.roads.len() as u32) as usize;
+                        match rng.below(3) {
+                            0 => e.roads[i].edge = v,
+                            1 => e.roads[i].owner = b,
+                            _ => e.roads.push(e.roads[i]),
+                        }
+                    }
+                    14 => {
+                        if rng.below(2) == 0 {
+                            e.players.pop();
+                        } else {
+                            e.players.push(e.players[0]);
+                        }
+                    }
+                    _ => e.rolled = !e.rolled,
+                }
+                if e.players.len() < 4 {
+                    break;
+                }
+            }
+            let got = std::panic::catch_unwind(|| build(&e, board.clone(), 5))
+                .unwrap_or_else(|_| panic!("build panicked on {e:?}"));
+            let Ok(b) = got else {
+                refused += 1;
+                continue;
+            };
+            built += 1;
+            let mut s = b.state;
+            assert!((1..=MAX_TURN).contains(&s.turn), "turn {}", s.turn);
+            s.check_invariants().unwrap();
+            let limits = Limits {
+                max_turns: s.turn + 3,
+                ..Limits::default()
+            };
+            std::panic::catch_unwind(move || {
+                play_out(
+                    &mut s,
+                    RandomPolicy::Builder,
+                    &limits,
+                    &mut Rng::seed(6),
+                    &mut Vec::new(),
+                )
+            })
+            .unwrap_or_else(|_| panic!("play panicked after building {e:?}"));
+        }
+        assert!(
+            built > 300 && refused > 1000,
+            "{built} built, {refused} refused"
+        );
     }
 }

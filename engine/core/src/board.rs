@@ -5,7 +5,9 @@ use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bits::Bits;
 use crate::rng::Rng;
+use crate::rules::PlayerCount;
 use crate::topology::{Axial, MAX_HEXES, Topology, TopologyError, ring};
 use crate::types::{HexId, Port, Resource, VertexId};
 
@@ -54,6 +56,12 @@ pub enum BoardError {
     /// The hexes aren't a board: none, too many, too far out, or too many corners or edges.
     Hexes(TopologyError),
     TooManyPorts(usize),
+    /// One land hex: a robber moved by a 7 or a knight has nowhere to go.
+    NoRobberMove,
+    /// The initial placement of this many players can reach a turn with no spot left for the
+    /// player to move: some settlements, fewer than two each, leave every corner taken or next
+    /// to one.
+    SetupCanStall(PlayerCount),
 }
 
 impl fmt::Display for BoardError {
@@ -79,6 +87,13 @@ impl fmt::Display for BoardError {
             BoardError::TooManyPorts(n) => {
                 write!(f, "{n} ports: a board has at most {MAX_PORTS}")
             }
+            BoardError::NoRobberMove => {
+                write!(f, "one land hex: the robber needs another hex to move to")
+            }
+            BoardError::SetupCanStall(n) => write!(
+                f,
+                "too few corners for {n} players: the initial placement can leave a player no spot"
+            ),
         }
     }
 }
@@ -212,6 +227,40 @@ impl Board {
             ports: self.ports.iter().map(|(spot, _)| *spot).collect(),
             robber: Some(self.topology.hexes[self.robber_start as usize]),
         }
+    }
+
+    /// Whether the robber, moved by a 7 or a knight, always has a hex to go to: a second land hex.
+    pub fn robber_can_move(&self) -> Result<(), BoardError> {
+        if self.topology.num_hexes() < 2 {
+            return Err(BoardError::NoRobberMove);
+        }
+        Ok(())
+    }
+
+    /// Whether every game of `players` on this board, from the initial placement on, has a move
+    /// at every decision. Most decisions always have one (rolling, ending the turn, declining a
+    /// trade); two depend on the board:
+    ///
+    /// - moving the robber ([`Board::robber_can_move`]);
+    /// - a settlement in the initial placement, which needs a corner that isn't taken or next to
+    ///   one. The settlements placed so far are corners no two of which are neighbours; the
+    ///   placement stalls when fewer than `2 * players` of them cover every corner (each corner
+    ///   taken or next to one taken). [`covers_within`] looks for such a set.
+    ///
+    /// Roads in the initial placement never stall: a road there touches its own settlement, so a
+    /// corner next to someone else's road is next to a settlement too.
+    pub fn hosts(&self, players: PlayerCount) -> Result<(), BoardError> {
+        self.robber_can_move()?;
+        let fewer = 2 * usize::from(players.get()) - 1;
+        // A settlement covers itself and at most three neighbours, so `fewer` settlements cover
+        // at most `4 * fewer` corners: on a board with more, nothing stalls.
+        if self.topology.num_vertices() > 4 * fewer {
+            return Ok(());
+        }
+        if covers_within(&self.topology, Bits::default(), fewer) {
+            return Err(BoardError::SetupCanStall(players));
+        }
+        Ok(())
     }
 
     /// Generates a standard 19-hex board.
@@ -429,6 +478,26 @@ fn generate_standard_layout(spec: &BoardGen, rng: &mut Rng) -> BoardLayout {
             robber: None,
         };
     }
+}
+
+/// Whether `left` more settlements or fewer, each on a corner `covered` doesn't hold (taken or
+/// next to one taken), can leave every corner covered. The first uncovered corner must end up
+/// covered by a settlement on it or on a neighbour, so trying each of those (at most four, all
+/// uncovered) tries every such set, `left` deep.
+fn covers_within(topo: &Topology, covered: Bits, left: usize) -> bool {
+    let Some(v) = (topo.all_vertices & !covered).ones().next() else {
+        return true;
+    };
+    left > 0
+        && (topo.vertex_block_bits[usize::from(v)] & !covered)
+            .ones()
+            .any(|w| {
+                covers_within(
+                    topo,
+                    covered | topo.vertex_block_bits[usize::from(w)],
+                    left - 1,
+                )
+            })
 }
 
 /// Whether two 6/8 tokens sit on adjacent hexes (numbers indexed like the standard hexes).
@@ -892,6 +961,224 @@ mod tests {
         assert_eq!(total, 30); // 36 outcomes minus the six 7s
         assert_eq!(Board::pips(6), 5);
         assert_eq!(Board::pips(12), 1);
+    }
+
+    /// Every board of deserts on some of the hexes of the 7-hex flower (each non-empty subset,
+    /// 127 boards, joined or not) and on a line of 2 to 8 hexes.
+    fn small_boards() -> Vec<(String, Board)> {
+        let flower: Vec<Axial> = std::iter::once(Axial::new(0, 0)).chain(ring(1)).collect();
+        let mut sets: Vec<Vec<Axial>> = (1..1u32 << flower.len())
+            .map(|mask| {
+                (0..flower.len())
+                    .filter(|&i| mask & (1 << i) != 0)
+                    .map(|i| flower[i])
+                    .collect()
+            })
+            .collect();
+        sets.extend((2..=8).map(|n| (0..n).map(|q| Axial::new(q, 0)).collect()));
+        sets.into_iter()
+            .map(|hexes| {
+                let layout = BoardLayout {
+                    hexes: hexes
+                        .iter()
+                        .map(|a| HexSpec {
+                            q: a.q,
+                            r: a.r,
+                            resource: None,
+                            number: None,
+                        })
+                        .collect(),
+                    ports: vec![],
+                    robber: None,
+                };
+                (format!("{hexes:?}"), Board::from_layout(&layout).unwrap())
+            })
+            .collect()
+    }
+
+    /// The reference for the initial placement's stall, by brute force: every set of corners no
+    /// two of which are neighbours, smallest first, and whether one of fewer than `settlements`
+    /// leaves no corner open.
+    fn stall_by_brute_force(topo: &Topology, settlements: usize) -> bool {
+        fn grow(topo: &Topology, chosen: &mut Vec<usize>, from: usize, left: usize) -> bool {
+            let nv = topo.num_vertices();
+            let open = |v: usize, chosen: &[usize]| {
+                chosen.iter().all(|&c| {
+                    c != v
+                        && !topo.vertex_neighbors[c]
+                            .as_slice()
+                            .contains(&(v as VertexId))
+                })
+            };
+            if (0..nv).all(|v| !open(v, chosen)) {
+                return true;
+            }
+            if left == 0 {
+                return false;
+            }
+            for v in from..nv {
+                if open(v, chosen) {
+                    chosen.push(v);
+                    let found = grow(topo, chosen, v + 1, left - 1);
+                    chosen.pop();
+                    if found {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        grow(topo, &mut Vec::new(), 0, settlements - 1)
+    }
+
+    /// Issue #23: a board with no possible game was read, and a game on it panicked when the
+    /// first decision had no move. `hosts` agrees with the brute-force reference on every small
+    /// board and player count, refuses some of them for each count and accepts some, and some
+    /// of those it accepts are small enough that it searched them (rather than counting corners).
+    #[test]
+    fn a_board_hosts_a_game_exactly_when_no_decision_can_run_out_of_moves() {
+        let mut verdicts = [[0; 2]; 3];
+        let mut searched_and_hosted = 0;
+        for (what, board) in small_boards() {
+            for (i, n) in [PlayerCount::TWO, PlayerCount::THREE, PlayerCount::FOUR]
+                .into_iter()
+                .enumerate()
+            {
+                let topo = &board.topology;
+                let want = if topo.num_hexes() < 2 {
+                    Err(BoardError::NoRobberMove)
+                } else if stall_by_brute_force(topo, 2 * usize::from(n.get())) {
+                    Err(BoardError::SetupCanStall(n))
+                } else {
+                    Ok(())
+                };
+                assert_eq!(board.hosts(n), want, "{what}, {n} players");
+                verdicts[i][usize::from(want.is_ok())] += 1;
+                let fewer = 2 * usize::from(n.get()) - 1;
+                if want.is_ok() && topo.num_vertices() <= 4 * fewer {
+                    searched_and_hosted += 1;
+                }
+            }
+        }
+        assert!(searched_and_hosted > 0);
+        for (n, [refused, hosted]) in (2..).zip(verdicts) {
+            assert!(
+                refused > 0 && hosted > 0,
+                "{n} players: {refused} refused, {hosted} hosted"
+            );
+        }
+        for seed in 0..20 {
+            let board = Board::generate(&BoardGen::OFFICIAL, &mut Rng::seed(seed));
+            for n in [PlayerCount::TWO, PlayerCount::THREE, PlayerCount::FOUR] {
+                assert_eq!(board.hosts(n), Ok(()));
+            }
+        }
+    }
+
+    /// `hosts` skips the search on a board of more than `4(2n-1)` corners: 12, 20 or 28. At
+    /// exactly that many, a stall would take `2n-1` settlements covering every corner, each its
+    /// own and three neighbours' and no corner twice: a perfect cover. A board's perfect cover is
+    /// one of each of its pieces (its joined groups of hexes), and adding a hex never takes a
+    /// corner away. So every joined board of up to 28 corners is grown here, one hex at a time
+    /// from a single hex, and the corner counts of those with a perfect cover are collected. No
+    /// sum of those counts is 12, 20 or 28, so no board at the bound has a stall: skipping the
+    /// search there too would give the same answers (the shortcut's two surviving mutants, `>=`
+    /// and `==` for `>`, are equivalent). The 7-hex flower, of 24 corners, has one; 24 is the
+    /// bound of no player count.
+    #[test]
+    fn no_board_at_the_corner_bound_has_a_perfect_cover() {
+        use crate::topology::DIRECTIONS;
+        use std::collections::{BTreeSet, HashSet};
+        type Shape = BTreeSet<(i8, i8)>;
+        let at_origin = |s: Shape| -> Shape {
+            let q = s.iter().map(|h| h.0).min().unwrap_or(0);
+            let r = s.iter().map(|h| h.1).min().unwrap_or(0);
+            s.into_iter().map(|(a, b)| (a - q, b - r)).collect()
+        };
+        let mut seen: HashSet<Shape> = HashSet::new();
+        let mut to_grow = vec![Shape::from([(0, 0)])];
+        let mut covered: BTreeSet<usize> = BTreeSet::new();
+        let (mut shapes, mut checked) = (0, 0);
+        while let Some(shape) = to_grow.pop() {
+            let hexes: Vec<Axial> = shape.iter().map(|&(q, r)| Axial::new(q, r)).collect();
+            let topo = Topology::try_from_hexes(&hexes).unwrap();
+            let corners = topo.num_vertices();
+            if corners > 28 {
+                continue;
+            }
+            shapes += 1;
+            if corners.is_multiple_of(4) {
+                checked += 1;
+                if covers_within(&topo, Bits::default(), corners / 4) {
+                    covered.insert(corners);
+                }
+            }
+            for &(q, r) in &shape {
+                for (dq, dr) in DIRECTIONS {
+                    let mut grown = shape.clone();
+                    if grown.insert((q + dq, r + dr)) {
+                        let grown = at_origin(grown);
+                        if seen.insert(grown.clone()) {
+                            to_grow.push(grown);
+                        }
+                    }
+                }
+            }
+        }
+        // The totals that pieces with a perfect cover make, any number of each, up to 28.
+        let mut reachable = [false; 29];
+        reachable[0] = true;
+        for total in 1..=28 {
+            reachable[total] = covered.iter().any(|&c| c <= total && reachable[total - c]);
+        }
+        for bound in [12, 20, 28] {
+            assert!(!reachable[bound], "{bound}: pieces of {covered:?} corners");
+        }
+        assert_eq!(covered, BTreeSet::from([24]), "only the 7-hex flower");
+        assert!(
+            shapes > 1000 && checked > 100,
+            "{shapes} shapes, {checked} checked"
+        );
+    }
+
+    /// Every small board that hosts a game of `n` holds random games to the end or the turn
+    /// limit, for both random policies: no decision without a move. So does every board with
+    /// a hex for the robber to move to, from an empty position after the initial placement.
+    #[test]
+    fn every_hosted_board_plays_out() {
+        use crate::sim::{Limits, RandomPolicy, play_out};
+        use crate::{GameConfig, GameState};
+        let limits = Limits {
+            max_turns: 40,
+            ..Limits::default()
+        };
+        let mut games = 0;
+        for (what, board) in small_boards() {
+            let board = Arc::new(board);
+            for n in [PlayerCount::TWO, PlayerCount::THREE, PlayerCount::FOUR] {
+                let rules = GameConfig::official(n).rules;
+                let from_start = GameState::with_board(rules, board.clone(), Rng::seed(1));
+                assert_eq!(from_start.is_ok(), board.hosts(n).is_ok(), "{what}");
+                let after = GameState::empty_position(rules, board.clone(), 1);
+                assert_eq!(after.is_ok(), board.robber_can_move().is_ok(), "{what}");
+                let starts = [from_start, after].into_iter().flatten();
+                for (start, (seed, policy)) in starts.flat_map(|s| {
+                    [(1, RandomPolicy::Uniform), (2, RandomPolicy::Builder)].map(|p| (s.clone(), p))
+                }) {
+                    let mut s = start;
+                    play_out(
+                        &mut s,
+                        policy,
+                        &limits,
+                        &mut Rng::seed(seed),
+                        &mut Vec::new(),
+                    );
+                    assert!(s.is_over() || s.turn > limits.max_turns, "{what}, {n}");
+                    games += 1;
+                }
+            }
+        }
+        assert!(games > 1000, "{games} games");
     }
 }
 

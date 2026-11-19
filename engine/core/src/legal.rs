@@ -99,7 +99,7 @@ impl GameState {
                             victim: None,
                         });
                     }
-                    for q in 0..self.rules.num_players {
+                    for q in 0..self.rules.num_players.get() {
                         if victims & (1 << q) != 0 {
                             out.push(Action::MoveRobber {
                                 hex: h,
@@ -169,7 +169,7 @@ impl GameState {
             Phase::TradeConfirm => {
                 let t = self.trade.expect("trade confirm without a trade");
                 let hand = &self.players[p as usize].hand;
-                for q in 0..self.rules.num_players {
+                for q in 0..self.rules.num_players.get() {
                     if q != p && t.terms(q).is_some_and(|(give, _)| hand.contains(&give)) {
                         out.push(Action::ConfirmTrade { with: q });
                     }
@@ -325,7 +325,7 @@ impl GameState {
     fn victims_by_hex(&self) -> [u8; 128] {
         let mut out = [0u8; 128];
         let topo = &self.board.topology;
-        for q in 0..self.rules.num_players {
+        for q in 0..self.rules.num_players.get() {
             if q == self.current || self.players[q as usize].hand.total() == 0 {
                 continue;
             }

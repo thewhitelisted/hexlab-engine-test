@@ -92,7 +92,7 @@ impl BeliefTracker {
         match *action {
             Action::BuildSettlement { vertex } => {
                 if pre.phase == Phase::SetupSettlement {
-                    if pre.setup_step >= pre.rules.num_players {
+                    if pre.setup_step >= pre.rules.num_players.get() {
                         self.gain(a, &pre.setup_gains(vertex));
                     }
                 } else {
@@ -285,11 +285,12 @@ impl BeliefTracker {
 mod tests {
     use super::*;
     use crate::rules::GameConfig;
+    use crate::rules::PlayerCount;
     use crate::state::PendingTrade;
 
     /// Observer 0 watches player 2 rob player 1, who held `victim`; everyone else holds `others`.
     fn after_unseen_steal(victim: Hand, others: Hand) -> (GameState, BeliefTracker) {
-        let pre = GameState::new(&GameConfig::official(3), 1);
+        let pre = GameState::new(&GameConfig::official(PlayerCount::THREE), 1);
         let hands = std::array::from_fn(|q| match q {
             1 => victim,
             0 | 2 => others,
@@ -379,7 +380,7 @@ mod tests {
 
     #[test]
     fn too_many_hypotheses_are_cut_and_marked_approximate() {
-        let pre = GameState::new(&GameConfig::official(3), 1);
+        let pre = GameState::new(&GameConfig::official(PlayerCount::THREE), 1);
         let hands = std::array::from_fn(|q| {
             if q == 1 {
                 Hand::new(1, 1, 1, 0, 0)

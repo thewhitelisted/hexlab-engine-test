@@ -31,7 +31,7 @@ pub use board::{Board, BoardGen, BoardLayout};
 pub use observation::Observation;
 pub use record::GameRecord;
 pub use rng::Rng;
-pub use rules::{GameConfig, Rules};
+pub use rules::{GameConfig, PlayerCount, Rules};
 pub use state::{GameState, Phase};
 pub use types::*;
 pub use view::View;

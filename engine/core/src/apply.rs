@@ -113,7 +113,9 @@ impl GameState {
                 }
                 let victims = self.robber_victims(hex);
                 match victim {
-                    Some(v) if v < self.rules.num_players && victims & (1 << v) != 0 => Ok(()),
+                    Some(v) if v < self.rules.num_players.get() && victims & (1 << v) != 0 => {
+                        Ok(())
+                    }
                     None if victims == 0 => Ok(()),
                     _ => Err(InvalidVictim),
                 }
@@ -227,7 +229,7 @@ impl GameState {
             }
             (Phase::TradeConfirm, Action::ConfirmTrade { with }) => {
                 let t = self.trade.expect("trade confirm without a trade");
-                match (with < self.rules.num_players && with != p)
+                match (with < self.rules.num_players.get() && with != p)
                     .then(|| t.terms(with))
                     .flatten()
                 {
@@ -310,7 +312,7 @@ impl GameState {
                     self.players[pi].ports |= port.bit();
                 }
                 if setup {
-                    if self.setup_step >= self.rules.num_players {
+                    if self.setup_step >= self.rules.num_players.get() {
                         let gains = self.setup_gains(vertex);
                         self.bank.sub(&gains);
                         self.players[pi].hand.add(&gains);
@@ -328,7 +330,7 @@ impl GameState {
                     Phase::SetupRoad { .. } => {
                         self.place_road(p, edge);
                         self.setup_step += 1;
-                        if self.setup_step == 2 * self.rules.num_players {
+                        if self.setup_step == 2 * self.rules.num_players.get() {
                             self.current = 0;
                             self.turn = 1;
                             self.phase = Phase::PreRoll;
@@ -557,7 +559,7 @@ impl GameState {
                 }
                 self.dev_played_this_turn = false;
                 self.offers_this_turn = 0;
-                self.current = (p + 1) % self.rules.num_players;
+                self.current = (p + 1) % self.rules.num_players.get();
                 self.turn += 1;
                 self.phase = Phase::PreRoll;
                 // Points gained off-turn (e.g. Longest Road changing hands) win now.
@@ -668,7 +670,7 @@ impl GameState {
     }
 
     fn advance_trade(&mut self) {
-        let n = self.rules.num_players;
+        let n = self.rules.num_players.get();
         let Some(mut t) = self.trade else { return };
         loop {
             t.responder_offset += 1;

@@ -4,7 +4,7 @@
 
 use engine_core::fuzz::{FuzzJob, FuzzStats, cross_check_legality, fuzz_game};
 use engine_core::sim::{Limits, RandomPolicy, TurnGuard};
-use engine_core::{GameConfig, GameState, Rng};
+use engine_core::{GameConfig, GameState, PlayerCount, Rng};
 
 fn run(config: GameConfig, policy: RandomPolicy, games: u64, seed: u64) -> FuzzStats {
     let job = FuzzJob {
@@ -20,7 +20,7 @@ fn run(config: GameConfig, policy: RandomPolicy, games: u64, seed: u64) -> FuzzS
     }
     // Short games never need pruning, so every tracker stays exact and checked at every step.
     assert_eq!(stats.approximate_trackers, 0);
-    let n = job.config.rules.num_players as u64;
+    let n = job.config.rules.num_players.get() as u64;
     assert!(stats.actions > 0 && stats.turns > 0);
     assert_eq!(stats.cross_checked, stats.actions, "a step went unchecked");
     assert_eq!(
@@ -34,18 +34,33 @@ fn run(config: GameConfig, policy: RandomPolicy, games: u64, seed: u64) -> FuzzS
 
 #[test]
 fn random_games_pass_every_check() {
-    let stats = run(GameConfig::official(4), RandomPolicy::Uniform, 6, 1);
+    let stats = run(
+        GameConfig::official(PlayerCount::FOUR),
+        RandomPolicy::Uniform,
+        6,
+        1,
+    );
     assert_eq!(stats.games, 6);
-    let stats = run(GameConfig::official(4), RandomPolicy::Builder, 12, 2);
+    let stats = run(
+        GameConfig::official(PlayerCount::FOUR),
+        RandomPolicy::Builder,
+        12,
+        2,
+    );
     assert!(stats.finished > 0, "builder games reach a winner");
 }
 
 #[test]
 fn other_presets_pass_every_check() {
-    run(GameConfig::official(3), RandomPolicy::Builder, 6, 3);
+    run(
+        GameConfig::official(PlayerCount::THREE),
+        RandomPolicy::Builder,
+        6,
+        3,
+    );
     run(GameConfig::colonist_1v1(), RandomPolicy::Builder, 6, 4);
     run(
-        GameConfig::catanatron_compat(4),
+        GameConfig::catanatron_compat(PlayerCount::FOUR),
         RandomPolicy::Builder,
         6,
         5,
@@ -88,7 +103,7 @@ fn trading_moves(config: &GameConfig, policy: RandomPolicy, games: u64, seed: u6
 /// single responder (who accepts, declines or counters, and the round is over).
 #[test]
 fn two_player_official_games_with_open_trading_pass_every_check() {
-    let config = GameConfig::official(2);
+    let config = GameConfig::official(PlayerCount::TWO);
     assert!(config.rules.player_trading && config.rules.open_trading);
     for (policy, games, seed) in [
         (RandomPolicy::Uniform, 8, 21),
@@ -119,11 +134,11 @@ fn two_player_official_games_with_open_trading_pass_every_check() {
 #[test]
 fn the_older_trade_flows_pass_every_check() {
     for name in ["official-no-counters", "official-proposal-round"] {
-        for players in [4, 3, 2] {
+        for players in [PlayerCount::FOUR, PlayerCount::THREE, PlayerCount::TWO] {
             let config = GameConfig::preset(name, players).expect("a preset");
             assert!(config.rules.player_trading, "{name}");
             for (policy, games) in [(RandomPolicy::Uniform, 4), (RandomPolicy::Builder, 6)] {
-                let seed = 30 + u64::from(players);
+                let seed = 30 + u64::from(players.get());
                 let stats = run(config, policy, games, seed);
                 assert_eq!(stats.games, games, "{name}, {players} players");
                 let [offers, _, _, proposals, confirms] =
@@ -147,14 +162,14 @@ fn the_older_trade_flows_pass_every_check() {
             }
         }
     }
-    let old = GameConfig::preset("official-no-counters", 4).unwrap();
-    let round = GameConfig::preset("official-proposal-round", 4).unwrap();
+    let old = GameConfig::preset("official-no-counters", PlayerCount::FOUR).unwrap();
+    let round = GameConfig::preset("official-proposal-round", PlayerCount::FOUR).unwrap();
     assert!(!old.rules.open_trading && round.rules.open_trading && round.rules.trade_proposals);
 }
 
 #[test]
 fn the_legality_cross_check_catches_a_wrong_list() {
-    let mut s = GameState::new(&GameConfig::official(4), 9);
+    let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 9);
     let (mut rng, mut guard, limits) = (Rng::seed(9), TurnGuard::default(), Limits::default());
     let mut legal = Vec::new();
     loop {
@@ -211,7 +226,7 @@ fn stats_from_several_threads_add_up() {
 #[test]
 fn cross_checks_run_on_every_nth_game_or_never() {
     let job = |cross_check_every| FuzzJob {
-        config: GameConfig::official(4),
+        config: GameConfig::official(PlayerCount::FOUR),
         games: 3,
         seed: 8,
         policy: RandomPolicy::Builder,

@@ -249,6 +249,7 @@ impl GameState {
 
 #[cfg(test)]
 mod tests {
+    use crate::rules::PlayerCount;
     use std::sync::Arc;
 
     use crate::rng::Rng;
@@ -268,7 +269,7 @@ mod tests {
     }
 
     fn after_setup() -> GameState {
-        let mut s = GameState::new(&GameConfig::official(4), 7);
+        let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 7);
         let (mut rng, mut guard, limits) = (Rng::seed(7), TurnGuard::default(), Limits::default());
         let mut legal = Vec::new();
         while s.turn == 0 {
@@ -354,7 +355,7 @@ mod tests {
             c.rules.vp_to_win = 2
         });
 
-        let mut done = GameState::new(&GameConfig::official(4), 8);
+        let mut done = GameState::new(&GameConfig::official(PlayerCount::FOUR), 8);
         let limits = Limits::default();
         let mut rng = Rng::seed(8);
         play_out(
@@ -379,7 +380,9 @@ mod tests {
             &crate::board::BoardGen::OFFICIAL,
             &mut Rng::seed(1),
         ));
-        let mut s = GameState::empty_position(GameConfig::official(3).rules, board, 9);
+        let mut s =
+            GameState::empty_position(GameConfig::official(PlayerCount::THREE).rules, board, 9)
+                .unwrap();
         let topo = s.board.topology.clone();
         let mut used = std::collections::HashSet::new();
         for (p, len) in [(0u8, 5usize), (1, 6)] {

@@ -52,7 +52,7 @@ pub struct FuzzJob {
 /// Plays game number `g` of a fuzz job with every check enabled.
 pub fn fuzz_game(job: &FuzzJob, g: u64, stats: &mut FuzzStats) -> Result<(), String> {
     let config = &job.config;
-    let n = config.rules.num_players as usize;
+    let n = config.rules.num_players.get() as usize;
     let limits = Limits::default();
     let mut legal = Vec::new();
     let game_seed = job.seed.wrapping_mul(1_000_000_007).wrapping_add(g);
@@ -176,14 +176,14 @@ pub fn cross_check_legality(state: &GameState, legal: &[Action]) -> Result<(), S
             hex: h,
             victim: None,
         });
-        for q in 0..state.rules.num_players {
+        for q in 0..state.rules.num_players.get() {
             candidates.push(Action::MoveRobber {
                 hex: h,
                 victim: Some(q),
             });
         }
     }
-    for q in 0..state.rules.num_players {
+    for q in 0..state.rules.num_players.get() {
         candidates.push(Action::ConfirmTrade { with: q });
     }
     for a in candidates {

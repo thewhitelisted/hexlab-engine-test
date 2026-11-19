@@ -108,8 +108,9 @@ impl GameRecord {
     }
 
     /// Replays the steps with their recorded chance outcomes, showing `seen` the state before each
-    /// step, and returns the state after the last. It doesn't check the final position, so it
-    /// also reads the record of a game still in play.
+    /// step, and returns the state after the last. `seen` is shown a step only once the rules have
+    /// applied it with its recorded outcome, so it never works on a step that can't happen. It
+    /// doesn't check the final position, so it also reads the record of a game still in play.
     pub fn replay_steps(
         &self,
         mut seen: impl FnMut(&GameState, &Step),
@@ -119,18 +120,21 @@ impl GameRecord {
         }
         let board = Board::from_layout(&self.board).map_err(ReplayError::Board)?;
         let mut state =
-            GameState::with_board(self.config.rules, Arc::new(board), Rng::seed(self.seed));
+            GameState::with_board(self.config.rules, Arc::new(board), Rng::seed(self.seed))
+                .map_err(ReplayError::Board)?;
+        let mut before = state.clone();
         for (i, step) in self.steps.iter().enumerate() {
             if state.is_over() || state.acting_player() != step.actor {
                 return Err(ReplayError::WrongActor { step: i });
             }
-            seen(&state, step);
+            before.clone_from(&state);
             let outcome = state
                 .apply_forced(step.action, step.outcome.as_forced())
                 .map_err(|error| ReplayError::Rule { step: i, error })?;
             if outcome != step.outcome {
                 return Err(ReplayError::OutcomeMismatch { step: i });
             }
+            seen(&before, step);
         }
         Ok(state)
     }

@@ -20,7 +20,8 @@ fn board(seed: u64) -> Arc<Board> {
 }
 
 fn position(n: u8) -> GameState {
-    GameState::empty_position(GameConfig::official(n).rules, board(1), 99)
+    let n = PlayerCount::try_from(n).unwrap();
+    GameState::empty_position(GameConfig::official(n).rules, board(1), 99).unwrap()
 }
 
 fn neighbors(s: &GameState, v: VertexId) -> Vec<VertexId> {
@@ -113,7 +114,7 @@ fn legal(s: &GameState) -> Vec<Action> {
 
 #[test]
 fn initial_placement_is_snake_ordered_and_pays_the_second_settlement() {
-    let mut s = GameState::new(&GameConfig::official(4), 3);
+    let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 3);
     let mut order = Vec::new();
     let mut paid = 0;
     while s.turn == 0 {
@@ -159,7 +160,7 @@ fn initial_placement_is_snake_ordered_and_pays_the_second_settlement() {
 #[test]
 fn settling_on_a_harbour_during_play_gives_its_rate() {
     // Through `apply`, not the editor.
-    let mut s = GameState::new(&GameConfig::official(2), 3);
+    let mut s = GameState::new(&GameConfig::official(PlayerCount::TWO), 3);
     let ports = s.board.ports.clone();
     let (spot, vs) = ports.iter().find(|(p, _)| p.kind != Port::Generic).unwrap();
     let Port::Special(r) = spot.kind else {
@@ -172,7 +173,7 @@ fn settling_on_a_harbour_during_play_gives_its_rate() {
 
 #[test]
 fn ids_off_the_board_are_refused() {
-    let mut s = GameState::new(&GameConfig::official(2), 3);
+    let mut s = GameState::new(&GameConfig::official(PlayerCount::TWO), 3);
     let topo = s.board.topology.clone();
     let (nv, ne) = (topo.num_vertices() as VertexId, topo.num_edges() as EdgeId);
     assert_eq!(
@@ -252,7 +253,7 @@ fn forced_chance_outcomes_must_be_possible() {
 
 #[test]
 fn apply_legal_matches_apply() {
-    let config = GameConfig::official(4);
+    let config = GameConfig::official(PlayerCount::FOUR);
     let (mut a, mut b) = (GameState::new(&config, 8), GameState::new(&config, 8));
     let (mut rng, mut guard, limits) = (Rng::seed(2), TurnGuard::default(), Limits::default());
     let mut buf = Vec::new();
@@ -477,9 +478,9 @@ fn development_card_timing() {
     );
 
     // With the knight-only variant, progress cards wait for the roll.
-    let mut rules = GameConfig::official(2).rules;
+    let mut rules = GameConfig::official(PlayerCount::TWO).rules;
     rules.dev_timing = rules::DevTiming::KnightBeforeRoll;
-    let mut s = GameState::empty_position(rules, board(1), 1);
+    let mut s = GameState::empty_position(rules, board(1), 1).unwrap();
     s.give_dev_card(0, DevCard::Monopoly, false).unwrap();
     s.finish_edit().unwrap();
     assert_eq!(
@@ -634,7 +635,7 @@ fn robber_must_steal_when_it_can_and_only_from_players_with_cards() {
 #[test]
 fn friendly_robber_protects_players_with_two_points_or_fewer() {
     let config = GameConfig::colonist_1v1();
-    let mut s = GameState::empty_position(config.rules, board(1), 5);
+    let mut s = GameState::empty_position(config.rules, board(1), 5).unwrap();
     let (h, v1, _) = hex_with_two_spots(&s, Resource::Wheat);
     s.put_settlement(1, v1).unwrap();
     let far = spread_vertices(
@@ -708,7 +709,7 @@ fn sevens_make_big_hands_discard_half() {
     assert!(matches!(s.phase, Phase::MoveRobber { .. }));
 
     // The 1v1 preset only discards above 9.
-    let mut s = GameState::empty_position(GameConfig::colonist_1v1().rules, board(1), 5);
+    let mut s = GameState::empty_position(GameConfig::colonist_1v1().rules, board(1), 5).unwrap();
     s.set_hand(1, Hand::new(3, 3, 3, 0, 0)).unwrap();
     s.finish_edit().unwrap();
     s.apply_forced(Action::RollDice, Some(Forced::Dice(6, 1)))
@@ -753,9 +754,9 @@ fn bank_shortages_follow_the_official_rule() {
     assert!(s.production_gains(number)[0].is_empty());
 
     // The Catanatron rule: nobody gets it, even when only one player is owed it.
-    let mut rules = GameConfig::official(3).rules;
+    let mut rules = GameConfig::official(PlayerCount::THREE).rules;
     rules.shortage = ShortageRule::NobodyGets;
-    let mut s = GameState::empty_position(rules, board(1), 99);
+    let mut s = GameState::empty_position(rules, board(1), 99).unwrap();
     s.put_city(0, v1).unwrap();
     s.set_hand(2, Hand::new(0, 0, 0, 18, 0)).unwrap();
     s.finish_edit().unwrap();
@@ -1222,7 +1223,7 @@ fn belief_tracking_branches_on_hidden_steals_and_prunes_on_spends() {
 
 #[test]
 fn records_round_trip_and_replay_exactly() {
-    let config = GameConfig::official(4);
+    let config = GameConfig::official(PlayerCount::FOUR);
     let mut s = GameState::new(&config, 42);
     let mut record = GameRecord::start(&config, 42, &s);
     let mut rng = Rng::seed(1);
@@ -1753,18 +1754,18 @@ fn held_development_cards_count_new_and_old_but_not_played() {
 #[test]
 fn presets_are_found_by_name() {
     assert_eq!(
-        GameConfig::preset("official", 3),
-        Some(GameConfig::official(3))
+        GameConfig::preset("official", PlayerCount::THREE),
+        Some(GameConfig::official(PlayerCount::THREE))
     );
     assert_eq!(
-        GameConfig::preset("colonist-1v1", 2),
+        GameConfig::preset("colonist-1v1", PlayerCount::TWO),
         Some(GameConfig::colonist_1v1())
     );
     assert_eq!(
-        GameConfig::preset("catanatron-compat", 4),
-        Some(GameConfig::catanatron_compat(4))
+        GameConfig::preset("catanatron-compat", PlayerCount::FOUR),
+        Some(GameConfig::catanatron_compat(PlayerCount::FOUR))
     );
-    assert_eq!(GameConfig::preset("nope", 4), None);
+    assert_eq!(GameConfig::preset("nope", PlayerCount::FOUR), None);
 }
 
 #[test]
@@ -2019,10 +2020,10 @@ fn a_friendly_robber_with_every_hex_protected_may_go_anywhere() {
         .retain(|h| Axial::new(h.q, h.r).distance(Axial::new(0, 0)) <= 1);
     layout.ports.clear();
     layout.robber = Some(Axial::new(1, 0));
-    let mut rules = GameConfig::official(4).rules;
+    let mut rules = GameConfig::official(PlayerCount::FOUR).rules;
     rules.friendly_robber_max_vp = Some(2);
     let b = Arc::new(Board::from_layout(&layout).unwrap());
-    let mut s = GameState::empty_position(rules, b, 5);
+    let mut s = GameState::empty_position(rules, b, 5).unwrap();
     let topo = s.board.topology.clone();
     let centre = topo.hex_at(Axial::new(0, 0)).unwrap();
     let corners = topo.hex_vertices[centre as usize];
@@ -2053,7 +2054,7 @@ fn a_friendly_robber_with_every_hex_protected_may_go_anywhere() {
 
 #[test]
 fn a_finished_game_shows_the_winner_as_acting() {
-    let mut s = GameState::new(&GameConfig::official(4), 6);
+    let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 6);
     let w = play_out(
         &mut s,
         RandomPolicy::Builder,
@@ -2129,7 +2130,7 @@ fn the_editor_refuses_impossible_positions() {
 #[test]
 fn nobody_wins_during_initial_placement() {
     // Even with a one-point target, points from placement count only once play starts.
-    let mut config = GameConfig::official(2);
+    let mut config = GameConfig::official(PlayerCount::TWO);
     config.rules.vp_to_win = 1;
     let mut s = GameState::new(&config, 3);
     let a = legal(&s)[0];
@@ -2141,7 +2142,7 @@ fn nobody_wins_during_initial_placement() {
 
 #[test]
 fn an_edited_position_equals_the_same_position_reached_by_play() {
-    let config = GameConfig::official(4);
+    let config = GameConfig::official(PlayerCount::FOUR);
     let mut played = GameState::new(&config, 12);
     let (mut rng, mut guard, limits) = (Rng::seed(12), TurnGuard::default(), Limits::default());
     while played.turn == 0 {
@@ -2149,7 +2150,7 @@ fn an_edited_position_equals_the_same_position_reached_by_play() {
         let a = guard.choose(RandomPolicy::Builder, &limits, &played, &legal, &mut rng);
         played.apply(a).unwrap();
     }
-    let mut edited = GameState::empty_position(config.rules, played.board.clone(), 34);
+    let mut edited = GameState::empty_position(config.rules, played.board.clone(), 34).unwrap();
     let topo = played.board.topology.clone();
     for v in 0..topo.num_vertices() as VertexId {
         if let Some(b) = played.building(v) {
@@ -2171,7 +2172,7 @@ fn an_edited_position_equals_the_same_position_reached_by_play() {
 
 #[test]
 fn any_position_can_be_turned_into_a_robber_move_at_the_start_of_a_turn() {
-    let mut s = GameState::new(&GameConfig::official(4), 8);
+    let mut s = GameState::new(&GameConfig::official(PlayerCount::FOUR), 8);
     let between = |r: Result<GameState, EditError>| matches!(r, Err(EditError::Invalid(m)) if m.contains("between the initial placement and the end"));
     assert!(between(s.robber_to_move(0)), "not in the initial placement");
     let limits = Limits {

@@ -122,6 +122,7 @@ impl Dice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::PlayerCount;
 
     #[test]
     fn balanced_dice_follow_the_deck_distribution() {
@@ -215,7 +216,7 @@ mod tests {
         };
         for (config, repeat_ok) in [
             (GameConfig::colonist_1v1(), false),
-            (GameConfig::official(4), true),
+            (GameConfig::official(PlayerCount::FOUR), true),
         ] {
             let mut s = GameState::new(&config, 3);
             to_the_next_roll(&mut s);
