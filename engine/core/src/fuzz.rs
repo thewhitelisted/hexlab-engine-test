@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use crate::action_bytes;
 use crate::record::GameRecord;
 use crate::sim::{Limits, RandomPolicy, TurnGuard};
 use crate::{
@@ -112,6 +113,29 @@ pub fn fuzz_game(job: &FuzzJob, g: u64, stats: &mut FuzzStats) -> Result<(), Str
         return Err(fail(
             record.steps.len(),
             "record JSON round trip changed it".into(),
+        ));
+    }
+    // The same moves as bytes (`hexlab positions --moves`) read back as they were played.
+    let mut bytes = Vec::new();
+    for s in &record.steps {
+        action_bytes::write(&s.action, &mut bytes);
+    }
+    let mut rest = bytes.as_slice();
+    for (i, s) in record.steps.iter().enumerate() {
+        let (action, used) = action_bytes::read(rest)
+            .map_err(|e| fail(i, format!("{:?} as bytes: {e}", s.action)))?;
+        if action != s.action {
+            return Err(fail(
+                i,
+                format!("{:?} came back from bytes as {action:?}", s.action),
+            ));
+        }
+        rest = rest.get(used..).unwrap_or_default();
+    }
+    if !rest.is_empty() {
+        return Err(fail(
+            record.steps.len(),
+            "bytes left after the last move".into(),
         ));
     }
     let replayed = back

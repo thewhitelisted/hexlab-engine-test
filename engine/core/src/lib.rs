@@ -3,6 +3,7 @@
 //!
 //! Entry points: [`GameState::new`], [`GameState::legal_actions`], [`GameState::apply`].
 
+pub mod action_bytes;
 pub mod actions;
 mod apply;
 pub mod belief;
