@@ -8,6 +8,7 @@
 
 use crate::actions::{Action, Outcome};
 use crate::belief::BeliefTracker;
+use crate::bits::Bits;
 use crate::board::Board;
 use crate::legal::OfferSpace;
 use crate::rng::Rng;
@@ -124,6 +125,30 @@ impl<'a> View<'a> {
 
     pub fn visible_vp(&self, p: PlayerId) -> u8 {
         self.state.visible_vp(p)
+    }
+
+    /// Whether the player on turn has played a development card this turn.
+    pub fn dev_played_this_turn(&self) -> bool {
+        self.state.dev_played_this_turn
+    }
+
+    /// Trade offers the player on turn has made this turn.
+    pub fn offers_this_turn(&self) -> u8 {
+        self.state.offers_this_turn
+    }
+
+    /// [`GameState::settlement_spots`] for seat `q`; `None` if no such seat is in the game.
+    pub fn settlement_spots(&self, q: PlayerId) -> Option<Bits> {
+        self.seated(q).then(|| self.state.settlement_spots(q))
+    }
+
+    /// [`GameState::road_spots`] for seat `q`; `None` if no such seat is in the game.
+    pub fn road_spots(&self, q: PlayerId) -> Option<Bits> {
+        self.seated(q).then(|| self.state.road_spots(q))
+    }
+
+    fn seated(&self, q: PlayerId) -> bool {
+        usize::from(q) < self.num_players()
     }
 
     pub fn player(&self, p: PlayerId) -> PublicPlayer {
@@ -358,13 +383,14 @@ mod tests {
 
     /// Plays a random game, calling `f` with the state and every player's belief at each step.
     fn walk(seed: u64, f: impl FnMut(&GameState, &[BeliefTracker])) {
-        walk_with(seed, 4096, f);
+        walk_with(seed, 4096, RandomPolicy::Builder, f);
     }
 
-    /// [`walk`] with trackers that keep at most `max_hypotheses`.
+    /// [`walk`] with trackers that keep at most `max_hypotheses`, playing `policy`.
     fn walk_with(
         seed: u64,
         max_hypotheses: usize,
+        policy: RandomPolicy,
         mut f: impl FnMut(&GameState, &[BeliefTracker]),
     ) {
         let config = GameConfig::official(PlayerCount::FOUR);
@@ -381,7 +407,7 @@ mod tests {
         let mut legal = Vec::new();
         while !state.is_over() && state.turn < 200 {
             state.legal_actions(&mut legal);
-            let action = guard.choose(RandomPolicy::Builder, &limits, &state, &legal, &mut rng);
+            let action = guard.choose(policy, &limits, &state, &legal, &mut rng);
             let actor = state.acting_player();
             let pre = state.clone();
             let outcome = state.apply(action).unwrap();
@@ -625,7 +651,7 @@ mod tests {
         // Trackers that keep one hypothesis turn approximate at the first hidden steal; the
         // fallback deals opponents' cards from what is public.
         let mut done = 0;
-        walk_with(11, 1, |state, beliefs| {
+        walk_with(11, 1, RandomPolicy::Builder, |state, beliefs| {
             let b = &beliefs[0];
             if done >= 5 || !b.is_approximate() {
                 return;
@@ -794,5 +820,117 @@ mod tests {
         let belief = BeliefTracker::with_hands(0, 2, wrong);
         let d = s.view(0).determinize(&belief, &mut Rng::seed(1));
         assert_eq!(d.players[1].hand, Hand::new(2, 0, 0, 0, 0));
+    }
+
+    /// Every seat number a caller could pass: each seat in the game, the empty seats up to
+    /// `MAX_PLAYERS`, one past that, and the largest `PlayerId`.
+    fn every_seat_id() -> impl Iterator<Item = PlayerId> {
+        (0..=MAX_PLAYERS as PlayerId).chain([PlayerId::MAX])
+    }
+
+    /// The four turn facts a view gives, for every seat id in [`every_seat_id`].
+    type TurnFacts = (bool, u8, Vec<Option<Bits>>, Vec<Option<Bits>>);
+
+    fn turn_facts(v: &View) -> TurnFacts {
+        (
+            v.dev_played_this_turn(),
+            v.offers_this_turn(),
+            every_seat_id().map(|q| v.settlement_spots(q)).collect(),
+            every_seat_id().map(|q| v.road_spots(q)).collect(),
+        )
+    }
+
+    /// Games with 2, 3 and 4 players, played by both random policies, so that offers, played
+    /// development cards and settlement spots all occur.
+    fn walk_games(mut f: impl FnMut(&GameState)) {
+        for (seed, policy) in [
+            (3, RandomPolicy::Builder),
+            (5, RandomPolicy::Uniform),
+            (8, RandomPolicy::Uniform),
+        ] {
+            walk_with(seed, 64, policy, |state, _| f(state));
+        }
+        for (players, seed) in [(PlayerCount::TWO, 21), (PlayerCount::THREE, 22)] {
+            let config = GameConfig::official(players);
+            let mut state = GameState::new(&config, seed);
+            let (mut rng, mut guard, limits) =
+                (Rng::seed(seed), TurnGuard::default(), Limits::default());
+            let mut legal = Vec::new();
+            while !state.is_over() && state.turn < 200 {
+                state.legal_actions(&mut legal);
+                let action = guard.choose(RandomPolicy::Uniform, &limits, &state, &legal, &mut rng);
+                state.apply(action).unwrap();
+                f(&state);
+            }
+        }
+    }
+
+    #[test]
+    fn the_turn_facts_are_the_states_own() {
+        let (mut played, mut offered, mut opponent_spots, mut steps) = (0, 0, 0, 0);
+        walk_games(|state| {
+            let n = state.num_players();
+            for me in 0..n as PlayerId {
+                let v = state.view(me);
+                assert_eq!(v.dev_played_this_turn(), state.dev_played_this_turn);
+                assert_eq!(v.offers_this_turn(), state.offers_this_turn);
+                for q in every_seat_id() {
+                    let seated = (q as usize) < n;
+                    assert_eq!(
+                        v.settlement_spots(q),
+                        seated.then(|| state.settlement_spots(q))
+                    );
+                    assert_eq!(v.road_spots(q), seated.then(|| state.road_spots(q)));
+                    if seated && q != me && !state.settlement_spots(q).is_empty() {
+                        opponent_spots += 1;
+                    }
+                }
+            }
+            played += state.dev_played_this_turn as u32;
+            offered += (state.offers_this_turn > 0) as u32;
+            steps += 1;
+        });
+        // The walk must reach every case the accessors report, or the test proves nothing.
+        assert!(steps > 1000, "only {steps} steps");
+        assert!(
+            played > 20,
+            "a development card was played at only {played} steps"
+        );
+        assert!(
+            offered > 20,
+            "an offer had been made at only {offered} steps"
+        );
+        assert!(
+            opponent_spots > 100,
+            "opponents had settlement spots only {opponent_spots} times"
+        );
+    }
+
+    #[test]
+    fn the_turn_facts_do_not_depend_on_hidden_cards() {
+        // For each viewer, a second state that differs only in what the viewer can't see:
+        // opponents' hands and development cards redealt, the deck reversed, the dice reseeded.
+        let mut rng = Rng::seed(4);
+        let (mut differed, mut compared) = (0, 0);
+        walk_games(|state| {
+            for me in 0..state.num_players() as PlayerId {
+                let mut other = state.view(me).deal_unseen(&mut rng);
+                other.dev_deck.reverse();
+                other.rng = Rng::seed(rng.next_u64());
+                other.check_invariants().unwrap();
+                let hidden_differs = other.dev_deck != state.dev_deck
+                    || (0..state.num_players()).any(|q| {
+                        let (a, b) = (&state.players[q], &other.players[q]);
+                        (a.hand, a.dev, a.dev_new) != (b.hand, b.dev, b.dev_new)
+                    });
+                differed += hidden_differs as u32;
+                compared += 1;
+                assert_eq!(turn_facts(&state.view(me)), turn_facts(&other.view(me)));
+            }
+        });
+        assert!(
+            differed * 2 > compared,
+            "the hidden cards differed in only {differed} of {compared} comparisons"
+        );
     }
 }
