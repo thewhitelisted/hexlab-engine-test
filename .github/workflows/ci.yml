@@ -1,6 +1,5 @@
 name: ci
 
-# Format, lints, tests in debug and release, and the WebAssembly build of engine/wasm.
 on:
   push:
     branches: [main]
