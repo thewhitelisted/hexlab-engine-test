@@ -69,7 +69,7 @@ Module map: `topology` (geometry), `board` (tiles, ports, generators), `rules` (
 | Reference model | Exported games replayed step by step in a separate Python implementation written from RULES.md | `tools/refmodel/run.sh` |
 | Phase model | Engine games checked as runs of a Quint model of turns and phases | `tools/phasemodel/check.sh` |
 
-`scripts/check.sh full` runs every check, a fuzz smoke test among them; the pre-push hook runs it before every push, and CI runs it when started by hand (docs/OPERATIONS.md, "Checks before a push"). The scripts in `tools/` are run by hand; each builds the engine first. `scripts/fuzz-long.sh` is the 1M-game run.
+`scripts/check.sh full` runs every check, a fuzz smoke test among them; the pre-push hook runs it before every push that changes more than `.md` files, and CI runs it when started by hand (docs/OPERATIONS.md, "Checks before a push"). The scripts in `tools/` are run by hand; each builds the engine first. `scripts/fuzz-long.sh` is the 1M-game run.
 
 ## Performance
 
